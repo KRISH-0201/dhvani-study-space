@@ -117,7 +117,8 @@ label.field{display:block;font-size:12px;font-weight:800;color:var(--muted);marg
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div><div class="toast" id="toast"></div><div class="print-area" id="printArea"></div>
 
 <script>
-const KEY='dhvaniStudyApp.v2';
+const KEY='dhvaniStudyApp.v3';
+const LEGACY_KEYS=['dhvaniStudyApp.v2','dhvaniStudyApp'];
 const SUBJECTS={biology:'જીવવિજ્ઞાન',physics:'ભૌતિકવિજ્ઞાન',chemistry:'રસાયણવિજ્ઞાન'};
 const SYLLABUS={
  biology:[
@@ -216,11 +217,128 @@ const FLASH={biology:[['કોષ (Cell)','સજીવોનો સૌથી �
 
 const MOTIVATION=['દરરોજનું નાનું પગલું જ મોટી સફળતા બનાવે છે. ❤️','NEET એક દિવસમાં નહીં, દરરોજની મહેનતથી જીતાય છે.','બીજા સાથે નહીં, ગઈકાલની ધ્વની સાથે સ્પર્ધા કર. ❤️','થાકી જવું ઠીક છે, પણ રોકાવું નહીં.','એક MCQ, એક chapter, એક દિવસ — ધીરે ધીરે તું પહોંચી જઈશ.','આજનો પ્રયત્ન કાલની સફળતા છે.','તારું સપનું મોટું છે — અને તું એની લાયક છે. ❤️'];
 const defaultData=()=>({settings:{neetTarget:'',boardTarget:'',dailyTargetHours:2},chapter:{},revision:{},attempts:{biology:0,physics:0,chemistry:0,mixed:0},results:[],mockHistory:[],wrong:[],bookmarks:{questions:[],formulas:[],chapters:[]},flashKnown:{},planner:[],timer:{date:'',sessions:0,minutes:0},studyDates:[],answers:[],gift:'',streak:0,lastStudy:''});
-let DATA=load();
-function load(){try{const x=JSON.parse(localStorage.getItem(KEY));return {...defaultData(),...x,settings:{...defaultData().settings,...(x?.settings||{})},bookmarks:{...defaultData().bookmarks,...(x?.bookmarks||{})},timer:{...defaultData().timer,...(x?.timer||{})}}}catch{return defaultData()}}
-function save(){localStorage.setItem(KEY,JSON.stringify(DATA));checkAchievements();}
-function today(){const d=new Date();return d.toISOString().slice(0,10)}
-function registerStudy(){const t=today();if(DATA.lastStudy===t)return;const y=new Date();y.setDate(y.getDate()-1);const ys=y.toISOString().slice(0,10);DATA.streak=DATA.lastStudy===ys?(DATA.streak||0)+1:1;DATA.lastStudy=t;if(!DATA.studyDates.includes(t))DATA.studyDates.push(t);save()}
+function emptyDataShape(){return defaultData()}
+function canUseStorage(){
+  try{
+    const probe='__dhvani_storage_probe__';
+    localStorage.setItem(probe,'1');
+    localStorage.removeItem(probe);
+    return true;
+  }catch(e){
+    console.warn('localStorage unavailable:',e);
+    return false;
+  }
+}
+function readStoredData(){
+  if(!canUseStorage()) return {data:null, source:null, storageOk:false};
+  const keys=[KEY,...LEGACY_KEYS];
+  for(const key of keys){
+    try{
+      const raw=localStorage.getItem(key);
+      if(!raw) continue;
+      const parsed=JSON.parse(raw);
+      if(parsed && typeof parsed==='object') return {data:parsed, source:key, storageOk:true};
+    }catch(e){
+      console.warn('Could not read storage key',key,e);
+    }
+  }
+  return {data:null, source:null, storageOk:true};
+}
+let STORAGE_OK=true;
+function load(){
+  const read=readStoredData();
+  STORAGE_OK=read.storageOk;
+  const x=read.data;
+  const base=defaultData();
+  if(!x) return base;
+  const d={...base,...x,
+    settings:{...base.settings,...(x.settings||{})},
+    bookmarks:{...base.bookmarks,...(x.bookmarks||{})},
+    timer:{...base.timer,...(x.timer||{})},
+    attempts:{...base.attempts,...(x.attempts||{})}
+  };
+  if(!Array.isArray(d.studyDates)) d.studyDates=[];
+  if(!Array.isArray(d.results)) d.results=[];
+  if(!Array.isArray(d.mockHistory)) d.mockHistory=[];
+  if(!Array.isArray(d.wrong)) d.wrong=[];
+  if(!Array.isArray(d.planner)) d.planner=[];
+  if(!Array.isArray(d.answers)) d.answers=[];
+  if(read.source && read.source!==KEY && STORAGE_OK){
+    try{localStorage.setItem(KEY,JSON.stringify(d));}catch(e){console.warn('Migration save failed',e)}
+  }
+  recalculateStreakFor(d);
+  return d;
+}
+function recalculateStreakFor(d){
+  const dates=new Set((d.studyDates||[]).filter(Boolean));
+  const dateNow=new Date(); dateNow.setHours(12,0,0,0);
+  const key=()=>dateNow.getFullYear()+'-'+pad2(dateNow.getMonth()+1)+'-'+pad2(dateNow.getDate());
+  let end=key();
+  if(!dates.has(end)){
+    dateNow.setDate(dateNow.getDate()-1);
+    end=key();
+    if(!dates.has(end)){d.streak=0;return;}
+  }
+  let count=0;
+  while(dates.has(end)){
+    count++;
+    dateNow.setDate(dateNow.getDate()-1);
+    end=key();
+  }
+  d.streak=count;
+}
+
+function save(){
+  recalculateStreakFor(DATA);
+  if(!canUseStorage()){
+    STORAGE_OK=false;
+    showToast('⚠️ આ browser storage save કરી શકતું નથી. GitHub Pages પરથી app ખોલો.');
+    return;
+  }
+  try{
+    localStorage.setItem(KEY,JSON.stringify(DATA));
+    STORAGE_OK=true;
+  }catch(e){
+    STORAGE_OK=false;
+    console.error('Save failed:',e);
+    showToast('⚠️ Data save થયું નહીં. Browser storage તપાસો.');
+  }
+  checkAchievements();
+}
+function pad2(n){return String(n).padStart(2,'0')}
+function localDateKey(d=new Date()){
+  return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())
+}
+function today(){return localDateKey()}
+function dateKeyOffset(days){const d=new Date();d.setHours(12,0,0,0);d.setDate(d.getDate()+days);return localDateKey(d)}
+function recalculateStreak(){
+  const dates=new Set((DATA.studyDates||[]).filter(Boolean));
+  const todayKey=today();
+  let endKey=todayKey;
+  // A streak is allowed to remain visible through today even before today's activity.
+  // Find the most recent study day; if it was yesterday (or today), count backwards.
+  let cursor=new Date(); cursor.setHours(12,0,0,0);
+  if(!dates.has(todayKey)){
+    const yesterdayKey=dateKeyOffset(-1);
+    if(dates.has(yesterdayKey)) endKey=yesterdayKey;
+    else { DATA.streak=0; DATA.lastStudy=DATA.lastStudy||''; return; }
+  }
+  let count=0;
+  let d=new Date(endKey+'T12:00:00');
+  while(dates.has(localDateKey(d))){
+    count++;
+    d.setDate(d.getDate()-1);
+  }
+  DATA.streak=count;
+  DATA.lastStudy=endKey;
+}
+function registerStudy(){
+  const t=today();
+  if(!Array.isArray(DATA.studyDates)) DATA.studyDates=[];
+  if(!DATA.studyDates.includes(t)) DATA.studyDates.push(t);
+  recalculateStreak();
+  save();
+}
 function showToast(s){const t=document.getElementById('toast');t.textContent=s;t.classList.add('show');clearTimeout(window.toast);window.toast=setTimeout(()=>t.classList.remove('show'),2200)}
 function showView(name){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));const el=document.getElementById('view-'+name);if(el)el.classList.add('active');window.scrollTo(0,0);document.querySelectorAll('.nav').forEach(b=>b.classList.remove('active'));const map={dashboard:'dashboard',subject:'subjects',mock:'mock',planner:'planner',more:'more',timer:'more',flash:'more',revision:'more'};const b=document.querySelector('.nav[data-view="'+(map[name]||name)+'"]');if(b)b.classList.add('active');refresh(name)}
 function refresh(name){if(name==='dashboard')renderDashboard();if(name==='subject')renderSubject();if(name==='practice')renderPractice();if(name==='mock')renderMock();if(name==='flash')renderFlash();if(name==='formulas')renderFormulas();if(name==='board')renderBoard();if(name==='writing')renderAnswers();if(name==='planner')renderPlanner();if(name==='timer')renderTimer();if(name==='revision')renderRevision();if(name==='wrong')renderWrong();if(name==='favorites')renderFav();if(name==='progress')renderProgress();if(name==='achievements')renderBadges();if(name==='settings')renderSettings();if(name==='gift')renderGift()}
@@ -228,7 +346,8 @@ let currentSubject='biology',practiceTab='chapters',boardTab='biology',revisionT
 function subjectProgress(s){let c=SYLLABUS[s];return Math.round(c.reduce((sum,ch)=>sum+chapterPct(ch[0]),0)/c.length)}
 function chapterPct(id){const p=DATA.chapter[id]||{};return Math.round(([p.study,p.revision,p.mcq,p.board].filter(Boolean).length/4)*100)}
 function overall(){return Math.round(['biology','physics','chemistry'].reduce((a,s)=>a+subjectProgress(s),0)/3)}
-function renderDashboard(){document.getElementById('streakVal').textContent=DATA.streak||0;document.getElementById('todayDate').textContent=new Date().toLocaleDateString('gu-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'});document.getElementById('dailyTarget').textContent=(DATA.settings.dailyTargetHours||2)+' કલાક';document.getElementById('quote').textContent='💡 '+MOTIVATION[Math.floor((Date.now()-new Date(new Date().getFullYear(),0,0))/86400000)%MOTIVATION.length];document.getElementById('overall').textContent=overall()+'%';document.getElementById('overallBar').style.width=overall()+'%';resetTimerDay(false);document.getElementById('focus').textContent=DATA.timer.minutes||0;const weekStart=new Date();const day=(weekStart.getDay()+6)%7;weekStart.setDate(weekStart.getDate()-day);let c=0;for(let i=0;i<7;i++){const d=new Date(weekStart);d.setDate(weekStart.getDate()+i);if(DATA.studyDates.includes(d.toISOString().slice(0,10)))c++}document.getElementById('week').textContent=Math.round(c/7*100)+'%';const ts=DATA.planner.filter(x=>x.date===today());document.getElementById('tasks').textContent=ts.filter(x=>x.done).length+'/'+ts.length;['biology','physics','chemistry'].forEach(s=>{const p=subjectProgress(s);document.getElementById(s==='biology'?'bioPct':s==='physics'?'phyPct':'chemPct').textContent=p+'%';document.getElementById(s==='biology'?'bioBar':s==='physics'?'phyBar':'chemBar').style.width=p+'%'});const due=[];['biology','physics','chemistry'].forEach(s=>SYLLABUS[s].forEach(ch=>{const p=DATA.chapter[ch[0]]||{};const r=DATA.revision[ch[0]]||{};if(p.study&&!r.r1)due.push({s,ch})}));document.getElementById('dueBox').innerHTML=due.slice(0,4).map(({s,ch})=>`<div class="listitem" onclick="openSubject('${s}')"><div class="title">${ch[1]}</div><div class="meta">${SUBJECTS[s]} • Revision 1 બાકી</div></div>`).join('')||'<div class="empty-state muted" style="text-align:center;padding:22px">હમણાં કોઈ revision due નથી. 🌱</div>'}
+function renderDashboard(){document.getElementById('streakVal').textContent=DATA.streak||0;document.getElementById('todayDate').textContent=new Date().toLocaleDateString('gu-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+if(!STORAGE_OK) showToast('⚠️ Data persistence disabled — GitHub Pages પર app ખોલો.');document.getElementById('dailyTarget').textContent=(DATA.settings.dailyTargetHours||2)+' કલાક';document.getElementById('quote').textContent='💡 '+MOTIVATION[Math.floor((Date.now()-new Date(new Date().getFullYear(),0,0))/86400000)%MOTIVATION.length];document.getElementById('overall').textContent=overall()+'%';document.getElementById('overallBar').style.width=overall()+'%';resetTimerDay(false);document.getElementById('focus').textContent=DATA.timer.minutes||0;const weekStart=new Date();const day=(weekStart.getDay()+6)%7;weekStart.setDate(weekStart.getDate()-day);let c=0;for(let i=0;i<7;i++){const d=new Date(weekStart);d.setDate(weekStart.getDate()+i);if(DATA.studyDates.includes(localDateKey(d)))c++}document.getElementById('week').textContent=Math.round(c/7*100)+'%';const ts=DATA.planner.filter(x=>x.date===today());document.getElementById('tasks').textContent=ts.filter(x=>x.done).length+'/'+ts.length;['biology','physics','chemistry'].forEach(s=>{const p=subjectProgress(s);document.getElementById(s==='biology'?'bioPct':s==='physics'?'phyPct':'chemPct').textContent=p+'%';document.getElementById(s==='biology'?'bioBar':s==='physics'?'phyBar':'chemBar').style.width=p+'%'});const due=[];['biology','physics','chemistry'].forEach(s=>SYLLABUS[s].forEach(ch=>{const p=DATA.chapter[ch[0]]||{};const r=DATA.revision[ch[0]]||{};if(p.study&&!r.r1)due.push({s,ch})}));document.getElementById('dueBox').innerHTML=due.slice(0,4).map(({s,ch})=>`<div class="listitem" onclick="openSubject('${s}')"><div class="title">${ch[1]}</div><div class="meta">${SUBJECTS[s]} • Revision 1 બાકી</div></div>`).join('')||'<div class="empty-state muted" style="text-align:center;padding:22px">હમણાં કોઈ revision due નથી. 🌱</div>'}
 function openSubject(s){currentSubject=s;renderSubject();showView('subject')}
 function renderSubject(){const map={biology:['bio','જીવવિજ્ઞાન (Biology)'],physics:['phy','ભૌતિકવિજ્ઞાન (Physics)'],chemistry:['chem','રસાયણવિજ્ઞાન (Chemistry)']};const h=document.getElementById('subjectHero');h.className='hero-sub '+map[currentSubject][0];document.getElementById('subjectTitle').textContent=map[currentSubject][1];document.getElementById('subjectSub').textContent=SYLLABUS[currentSubject].length+' chapters • ધોરણ 11';const p=subjectProgress(currentSubject);document.getElementById('subjectPct').textContent=p+'%';document.getElementById('subjectBar').style.width=p+'%';document.getElementById('chapterList').innerHTML=SYLLABUS[currentSubject].map((ch,i)=>{const x=DATA.chapter[ch[0]]||{};const pct=chapterPct(ch[0]);return `<div class="chapter"><div class="top"><div><span class="idx">${String(i+1).padStart(2,'0')}</span> <span class="name">${ch[1]}</span><div class="en">${ch[2]}</div></div><span class="num">${pct}%</span></div><div class="progress" style="margin:8px 0"><span style="width:${pct}%"></span></div><div class="actions"><button class="mini-btn ${x.study?'on':''}" onclick="toggleChapter('${ch[0]}','study')">📖 વાંચ્યું</button><button class="mini-btn ${x.revision?'on':''}" onclick="toggleChapter('${ch[0]}','revision')">🔁 રીવિઝન</button><button class="mini-btn ${x.mcq?'on':''}" onclick="chapterQuiz('${currentSubject}','${ch[0]}')">🎯 MCQ</button><button class="mini-btn ${x.board?'on':''}" onclick="toggleChapter('${ch[0]}','board')">📝 બોર્ડ</button><button class="mini-btn ${DATA.bookmarks.chapters.includes(ch[0])?'on':''}" onclick="toggleBookmarkChapter('${ch[0]}')">⭐</button></div></div>`}).join('')}
 function toggleChapter(id,flag){DATA.chapter[id]=DATA.chapter[id]||{};DATA.chapter[id][flag]=!DATA.chapter[id][flag];registerStudy();save();renderSubject();renderDashboard()}
